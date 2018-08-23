@@ -34,7 +34,7 @@ class Particle:
 
 
 # Print iterations progress
-def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=100, fill='█'):
+def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=100, fill='|'):
     """
     Call in a loop to create terminal progress bar
     @params:
@@ -75,8 +75,9 @@ proton = Particle((0.0, 0.0, 0.0), [0.0001*speed_of_light, 0.0, 0.0], 1.67E-27, 
 
 # MAGNETIC FIELD
 magn_uniform_field = np.array([0.0, 0.0, -1.1])
-sigma_Bx_By_Bz = np.array([0.0, 0.00, 0.0])
+sigma_Bx_By_Bz = np.array([0.01, 0.01, 0.01])
 # non uniform magnetic field with smeared  Bx-By-Bz components
+np.random.seed(0)
 non_uniform_magnetic_field = np.random.normal(magn_uniform_field, sigma_Bx_By_Bz, len(magn_uniform_field))
 
 # ELECTRIC FIELD
@@ -385,7 +386,7 @@ def part_plot(particle, max_iter, method, delta_t):
     axs[0, 2].set_title("Time vs. Energy")
     axs[0, 2].set_xlabel("Time ("+chr(956)+"s)")
     axs[0, 2].set_ylabel("Energy (MeV)")
-    
+
     results_to_save = np.array(results).T
     x = np.insert(results_to_save[0], 0, 0.0)
     y = np.insert(results_to_save[1], 0, 0.0)
