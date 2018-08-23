@@ -77,7 +77,7 @@ proton = Particle((0.0, 0.0, 0.0), [0.0001*speed_of_light, 0.0, 0.0], 1.67E-27, 
 magn_uniform_field = np.array([0.0, 0.0, -1.1])
 sigma_Bx_By_Bz = np.array([0.01, 0.01, 0.01])
 # non uniform magnetic field with smeared  Bx-By-Bz components
-np.random.seed(0)
+np.random.seed(1)
 non_uniform_magnetic_field = np.random.normal(magn_uniform_field, sigma_Bx_By_Bz, len(magn_uniform_field))
 
 # ELECTRIC FIELD
