@@ -1,8 +1,4 @@
-"""
-################################################################################################
-Comments, comments
-################################################################################################
-"""
+# -*- coding: utf-8 -*-
 from __future__ import print_function
 import numpy as np
 import matplotlib.pyplot as plt
@@ -14,6 +10,8 @@ import time
 from ipywidgets import interact, interactive, fixed, interact_manual
 import ipywidgets as widgets
 import pandas as pd
+import itertools
+import math 
 
 # sns.set()
 beginning_time = time.time()
@@ -23,6 +21,8 @@ speed_of_light = 3.0E08
 
 # number pi
 pi = math.pi
+
+number_of_points = 200
 
 class Particle:
     def __init__(self, pos, vel, mass, charge, energy=0):
@@ -60,11 +60,11 @@ def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=
 
 
 # DESIRED ENERGY OF THE OUTCOMING IONS
-desired_energy = 1.E6
+desired_energy = 4E5
 dee_sep = 1.5E-2
-HV = 1.E4
-# choose a proton as the particle
-proton = Particle((0.0, 0.0, 0.0), [0.0001*speed_of_light, 0.0, 0.0], 1.67E-27, +1.60E-19, )
+HV = 5.E3
+# construct a particle named as "proton"
+proton = Particle((1.4E-3, 0.0, 0.0), [0.0, 0.0, 0.0], 1.67E-27, +1.60E-19, )
 
 # ## Create the Magnetic and Electric Fields
 # <br> Our dipole magnet will create a uniform (hypothetically) magnetic field in the $z$-direction. So we must create a vector as
@@ -74,41 +74,85 @@ proton = Particle((0.0, 0.0, 0.0), [0.0001*speed_of_light, 0.0, 0.0], 1.67E-27, 
 
 
 # MAGNETIC FIELD
-magn_uniform_field = np.array([0.0, 0.0, -1.1])
-sigma_Bx_By_Bz = np.array([0.01, 0.01, 0.01])
-# non uniform magnetic field with smeared  Bx-By-Bz components
-np.random.seed(1)
-non_uniform_magnetic_field = np.random.normal(magn_uniform_field, sigma_Bx_By_Bz, len(magn_uniform_field))
+df = pd.read_csv('/Users/boraisildak/Documents/Github/cyclotron/mag_field_test.csv', na_filter=False, delimiter=",")
+
+
+x_mesh = np.arange(-230, 230, 5)
+y_mesh = np.arange(-230, 230, 5)
+z_mesh = np.arange(-20, 20, 5)
+
+@jit
+def get_bounding_cube(point, x_mesh, y_mesh, z_mesh):
+    x_bound_up = x_mesh.searchsorted(1E3*point[0])
+    x_bound = [x_mesh[x_bound_up-1], x_mesh[x_bound_up]]
+    y_bound_up = y_mesh.searchsorted(1E3*point[1])
+    y_bound = [y_mesh[y_bound_up-1], y_mesh[y_bound_up]]
+    z_bound_up = z_mesh.searchsorted(1E3*point[2])
+    z_bound = [z_mesh[z_bound_up-1], z_mesh[z_bound_up]]
+    
+    bounding_cube = np.asarray(list(itertools.product(x_bound, y_bound, z_bound)))
+    bounding_cube = bounding_cube.astype(float)
+    return bounding_cube
+@jit
+def get_B_IDW(datasample, point, bounding_points, p=2, metric=[1,1,1]):
+    # get B values wrt Inverse Distance Weighting (IDW)
+    #https://en.wikipedia.org/wiki/Inverse_distance_weighting
+    B_x_idw = 0
+    B_y_idw = 0
+    B_z_idw = 0
+    w_sum = 0
+    for r in bounding_points:    
+        del_x = abs(1E3*point[0]-r[0])
+        del_y = abs(1E3*point[1]-r[1])
+        del_z = abs(1E3*point[2]-r[2])
+        d = (metric[0]*del_x**2 + metric[1]*del_y**2 + metric[2]*del_z**2)**0.5
+        
+        if(d==0):
+            d=1.
+
+        w = float(1./d**p)
+        mask = (datasample.x == r[0]) & (datasample.y == r[1]) & (datasample.z == r[2])
+        #print(float(df[mask].Bz))
+        B_x_idw += w*float(df[mask].Bx)
+        B_y_idw += w*float(df[mask].By)
+        B_z_idw += w*float(df[mask].Bz)
+        w_sum += w
+    #print(B_idw/w_sum)
+    if(w_sum==0):
+        w_sum = 8.
+    B = np.array([B_x_idw/w_sum, B_y_idw/w_sum, B_z_idw/w_sum])
+    return B
 
 # ELECTRIC FIELD
-q, B, m = proton.charge, abs(magn_uniform_field[2]), proton.mass
-w = 1.0*(q*B/m)
+B_mean = float(df[(abs(df.x) < 20) & (abs(df.y) < 20) & (df.z == 0)].Bz.mean())
+print(B_mean)
+q, B, m = proton.charge, B_mean, proton.mass
+w = q*B/m
 phase = 0.0*(pi)
 
 print("Gyro-Frequency = %2.2f rad/ns" % (1E-9*(q*B/m)))
 print("Frequency = %2.2f MHz" % (1E-6*w/(2*pi)))
 
-
+@jit
 def e_field(t, phi=phase):
-    E = [(HV/dee_sep)*np.cos(w*t+phi), 0.0, 0.0]
+    # if(np.cos(w*t+phi)<0):
+    #     E = [-(HV/dee_sep), 0.0, 0.0]
+    # else:
+    #     E = [(HV/dee_sep), 0.0, 0.0]
+    E = [(HV/dee_sep)*np.sin(w*t+phi), 0.0, 0.0]
     return E
 
-
 #  Returns the acceleration vector due to an electromagnetic field ( from Lorentz force )
+@jit
 def em_acceleration(q_over_m, position, velocity, magnetic_field, t):
     #     calculated for a particle at position, with velocity
-    global jumps
-
-    # Stop after limit in jumps ( E = B = 0 --> straight line
 
     if abs(position[0]) >= dee_sep:
         a = q_over_m*np.cross(velocity, magnetic_field)
     else:
         a = q_over_m*(np.array(e_field(t))+np.cross(velocity, magnetic_field))
-            # if position[1] > expected_radius:
-            #    a = -a
-    return a
 
+    return a
 
 v_i = np.linalg.norm(proton.vel)
 expected_radius = v_i/((q*B/m))
@@ -117,38 +161,12 @@ print("Expected initial radius = %2.2f mm" % (1E3*expected_radius))
 expected_period = 2.0*pi/(B*(proton.charge/proton.mass))
 print("Expected period = %2.2f ns" % (1E9*expected_period))
 
-number_of_points = 1000
 delta_t = expected_period/number_of_points
 print("delta_t = %2.2f ns" % (1E9*delta_t))
 # Count how many times the particle jumps from 1 D to the other
 jumps = 0
 jumps_max = int(desired_energy/(proton.charge*HV))
 
-
-# EULER METHOD
-def euler(particle, desired_energy, delta_t):
-    q_over_m = particle.charge/particle.mass
-    results = []
-
-    i = 0
-    t = 0
-    p0 = np.array(particle.pos)
-    v0 = np.array(particle.vel)
-
-    while 0.5*(particle.mass)*(np.linalg.norm(v0)**2)/proton.charge < (desired_energy):
-        # for i in range(int(4E+4)):
-        a = em_acceleration(q_over_m, p0, v0, non_uniform_magnetic_field, t)
-        p0 = p0+delta_t*v0
-        v0 = v0+delta_t*a
-        results.append(p0)
-        i += 1
-        t += delta_t
-
-        if i % 100 == 0:
-            print("Energy = %8.3f MeV : Desired Energy = %8.3f MeV" % (
-                1.E-6*0.5*(particle.mass)*(np.linalg.norm(v0)**2)/proton.charge, 1.E-6*desired_energy))
-    print("Euler method finished!")
-    return results
 
 
 # MODIFIED EULER METHOD
@@ -171,10 +189,11 @@ def mdf_euler(particle, desired_energy, delta_t):
 
     while 0.5*(particle.mass)*(np.linalg.norm(v0)**2)/proton.charge < (desired_energy):
         # for i in range(int(4E+4)):
+        bounding_cube = get_bounding_cube(p0,x_mesh,y_mesh,z_mesh)
+        B  = get_B_IDW(df, p0, bounding_cube)
+        a = em_acceleration(q_over_m, p0, v0, B, t)
 
-        a = em_acceleration(q_over_m, p0, v0, non_uniform_magnetic_field, t)
-
-        delta_a = em_acceleration(q_over_m, p0, v0, non_uniform_magnetic_field, t+delta_t) - em_acceleration(q_over_m, p0, v0, non_uniform_magnetic_field, t)
+        delta_a = em_acceleration(q_over_m, p0, v0, B, t+delta_t) - em_acceleration(q_over_m, p0, v0, B, t)
 
         p0 = p0+delta_t*v0+0.5*(delta_t**2)*a+(1/6)*(delta_t**2)*delta_a
         v0 = v0+delta_t*a+0.5*delta_t*delta_a
@@ -185,7 +204,7 @@ def mdf_euler(particle, desired_energy, delta_t):
         energy.append(0.5*(particle.mass)*(np.linalg.norm(v0)**2)/proton.charge)
 
         if int(100*energy[-1]/desired_energy) > aux_index:
-            printProgressBar(int(100*energy[-1]/desired_energy), 100, prefix='Acceleration the Ion:',
+            printProgressBar(int(100*energy[-1]/desired_energy), 100, prefix='Accelerating the Ion:',
                              suffix='Complete', length=50)
             aux_index += 1
 
@@ -214,28 +233,40 @@ def rk4(particle, desired_energy, delta_t):
     while 0.5*particle.mass*(np.linalg.norm(v0)**2)/proton.charge < (desired_energy):
         # for i in range(int(4E+4)):
 
+        #if(i%100==0):
+        #   print(i)
         if i > int(1E5):
             print("Ion path is probably not stable!")
             break
-
+        bounding_cube = get_bounding_cube(p0,x_mesh,y_mesh,z_mesh)
+        B  = get_B_IDW(df, p0, bounding_cube)
+        #print(p0, B)
+        #B = non_uniform_magnetic_field
+        
         p1 = p0
         v1 = v0
-        a1 = delta_t*em_acceleration(q_over_m, p1, v1, non_uniform_magnetic_field, t)
+        a1 = delta_t*em_acceleration(q_over_m, p1, v1, B, t)
         v1 = delta_t*v1
 
         p2 = p0+(v1*0.5)
+        #bounding_cube = get_bounding_cube(p2,x_mesh,y_mesh,z_mesh)
+        #B  = get_B_IDW(df, p2, bounding_cube)
         v2 = v0+(a1*0.5)
-        a2 = delta_t*em_acceleration(q_over_m, p2, v2, non_uniform_magnetic_field, t)
+        a2 = delta_t*em_acceleration(q_over_m, p2, v2, B, t)
         v2 = delta_t*v2
 
         p3 = p0+(v2*0.5)
+        #bounding_cube = get_bounding_cube(p3,x_mesh,y_mesh,z_mesh)
+        #B  = get_B_IDW(df, p3, bounding_cube)
         v3 = v0+(a2*0.5)
-        a3 = delta_t*em_acceleration(q_over_m, p3, v3, non_uniform_magnetic_field, t)
+        a3 = delta_t*em_acceleration(q_over_m, p3, v3, B, t)
         v3 = delta_t*v3
 
         p4 = p0+v3
+        #bounding_cube = get_bounding_cube(p4,x_mesh,y_mesh,z_mesh)
+        #B  = get_B_IDW(df, p4, bounding_cube)
         v4 = v0+a3
-        a4 = delta_t*em_acceleration(q_over_m, p4, v4, non_uniform_magnetic_field, t)
+        a4 = delta_t*em_acceleration(q_over_m, p4, v4, B, t)
         v4 = delta_t*v4
 
         dv = (a1+2.0*(a2+a3)+a4)
@@ -252,19 +283,18 @@ def rk4(particle, desired_energy, delta_t):
 
         if int(100*energy[-1]/desired_energy) > aux_index:
             # print(int(100*energy/desired_energy), aux_index)
-            printProgressBar(int(100*energy[-1]/desired_energy), 100, prefix='Acceleration the Ion:',
+            printProgressBar(int(100*energy[-1]/desired_energy), 100, prefix='Accelerating the Ion:',
                              suffix='Complete', length=50)
             aux_index += 1
 
     print("Runge-Kutta method finished!")
     return s, results, energy
 
-
 s, results, energy = rk4(proton, desired_energy, delta_t)
 print("Distance traveled by the ion:%8.2f m" % s)
 
 # PLOTTING
-plt.style.use('dark_background')
+plt.style.use('seaborn')
 # fig1 = plt.figure()
 # ax[0 ,0] = fig1.add_subplot(1, 1, 1)
 
@@ -309,9 +339,6 @@ def part_plot(particle, max_iter, method, delta_t):
     #   print " initial velocity", v0/speed_of_light, 'the speed of light'
     print("initial velocity %1.4f the speed of light" % (v0/speed_of_light))
 
-    #   q_over_m = particle.charge/particle.mass
-    #   print 'theoretical time ( uniform B ) is', 3.1415/( b*q_over_m ),'seconds'
-
     # save the positions when in the spacing in a separate array
     #    so that w can change the color to red
     xc = []
@@ -328,7 +355,7 @@ def part_plot(particle, max_iter, method, delta_t):
         r.append(np.linalg.norm(p[0:2]))
 
         if p[0] >= dee_sep or p[0] <= -dee_sep:
-            #                  inside the D's
+            #inside the Dee's
             if len(xc):
                 axs[0, 0].plot(xc, yc, color='red', linewidth=0.95)
                 xc = []
@@ -367,25 +394,25 @@ def part_plot(particle, max_iter, method, delta_t):
     axs[0, 0].set_ylabel("Dimension-Y (m)")
 
     t = np.linspace(0, len(z)*delta_t, len(vz))
-    axs[0, 1].plot(np.multiply(r, 1000), np.multiply(z, 1000))
+    axs[0, 1].plot(np.multiply(r, 1E3), np.multiply(z, 1E3))
 
     axs[0, 1].set_xlabel("Radius (mm)")
     axs[0, 1].set_ylabel("z (mm)")
 
-    axs[1, 0].plot(np.multiply(t, 1E6), np.multiply(r, 1000))
+    axs[1, 0].plot(np.multiply(t, 1E6), np.multiply(r, 1E3))
     axs[1, 0].set_title("Time vs. Radius")
     axs[1, 0].set_xlabel("Time ("+chr(956)+")s")
     axs[1, 0].set_ylabel("Radius (mm)")
 
-    axs[1, 1].plot(np.multiply(t, 1E6), np.multiply(z, 1000))
+    axs[1, 1].plot(np.multiply(t, 1E6), np.multiply(z, 1E3))
     axs[1, 1].set_title("Time vs. z")
     axs[1, 1].set_xlabel("Time ("+chr(956)+"s)")
     axs[1, 1].set_ylabel("z (mm)")
 
-    axs[0, 2].plot(np.multiply(t, 1E6), np.multiply(energy, 1000))
+    axs[0, 2].plot(np.multiply(t, 1E6), np.multiply(energy,1E-3))
     axs[0, 2].set_title("Time vs. Energy")
     axs[0, 2].set_xlabel("Time ("+chr(956)+"s)")
-    axs[0, 2].set_ylabel("Energy (MeV)")
+    axs[0, 2].set_ylabel("Energy (keV)")
 
     results_to_save = np.array(results).T
     x = np.insert(results_to_save[0], 0, 0.0)
@@ -402,3 +429,4 @@ part_plot(proton, desired_energy, 'rk4', delta_t)
 print(time.time() - beginning_time)
 plt.tight_layout()
 plt.show()
+plt.savefig("plots.pdf")
